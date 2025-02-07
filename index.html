@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pong AR</title>
+    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+    <script src="https://cdn.rawgit.com/donmccurdy/aframe-extras/v4.1.2/dist/aframe-extras.min.js"></script>
+    <script>
+        AFRAME.registerComponent('pong-game', {
+            init: function () {
+                this.ball = document.querySelector('#ball');
+                this.paddleLeft = document.querySelector('#paddleLeft');
+                this.paddleRight = document.querySelector('#paddleRight');
+                this.ballDirection = { x: 0.03, y: 0.02 };
+                this.speed = 0.02;
+                
+                window.addEventListener('deviceorientation', (event) => {
+                    let tilt = event.gamma / 30;  // Normalize tilt
+                    this.movePaddle(this.paddleLeft, tilt * 0.2);
+                    this.movePaddle(this.paddleRight, -tilt * 0.2);
+                });
+                
+                document.addEventListener('touchmove', (event) => {
+                    let touch = event.touches[0];
+                    let normalizedY = (touch.clientY / window.innerHeight) * 3 - 1.5;
+                    this.paddleLeft.setAttribute('position', `-2.8 ${normalizedY} 0`);
+                    this.paddleRight.setAttribute('position', `2.8 ${-normalizedY} 0`);
+                });
+                
+                this.tick = this.tick.bind(this);
+            },
+            movePaddle: function (paddle, amount) {
+                let pos = paddle.getAttribute('position');
+                pos.y += amount;
+                pos.y = Math.max(-1.5, Math.min(1.5, pos.y));
+                paddle.setAttribute('position', pos);
+            },
+            tick: function () {
+                let ballPos = this.ball.getAttribute('position');
+                ballPos.x += this.ballDirection.x;
+                ballPos.y += this.ballDirection.y;
+                
+                // Bounce off walls
+                if (ballPos.y > 1.5 || ballPos.y < -1.5) {
+                    this.ballDirection.y *= -1;
+                }
+                
+                // Check for paddle collisions
+                let leftPaddlePos = this.paddleLeft.getAttribute('position');
+                let rightPaddlePos = this.paddleRight.getAttribute('position');
+                
+                if (ballPos.x < -2.7 && Math.abs(ballPos.y - leftPaddlePos.y) < 0.5) {
+                    this.ballDirection.x *= -1;
+                }
+                if (ballPos.x > 2.7 && Math.abs(ballPos.y - rightPaddlePos.y) < 0.5) {
+                    this.ballDirection.x *= -1;
+                }
+                
+                // Reset if out of bounds
+                if (ballPos.x < -3 || ballPos.x > 3) {
+                    ballPos.x = 0;
+                    ballPos.y = 0;
+                }
+                
+                this.ball.setAttribute('position', ballPos);
+            }
+        });
+    </script>
+</head>
+<body>
+    <a-scene embedded arjs="sourceType: webcam;">
+        <a-camera position="0 1.5 5"></a-camera>
+        
+        <a-plane position="0 0 0" rotation="-90 0 0" width="6" height="3" color="gray"></a-plane>
+        <a-box id="paddleLeft" position="-2.8 0 0" width="0.2" height="1" depth="0.1" color="blue"></a-box>
+        <a-box id="paddleRight" position="2.8 0 0" width="0.2" height="1" depth="0.1" color="red"></a-box>
+        <a-sphere id="ball" position="0 0 0.1" radius="0.15" color="white"></a-sphere>
+        
+        <a-entity pong-game></a-entity>
+    </a-scene>
+</body>
+</html>
