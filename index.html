@@ -38,7 +38,7 @@
       const gravity = new THREE.Vector3(0, 0, 0); // (set nonzero if desired)
 
       // ----- Setup WebSocket Connection (for sending collision events) -----
-      const socket = new WebSocket('ws://10.12.113.89:port');
+      const socket = new WebSocket('ws://10.12.113.89:8081');
       socket.addEventListener('open', function (event) {
           console.log('WebSocket connected');
       });
