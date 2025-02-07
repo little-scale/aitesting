@@ -1,83 +1,160 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pong AR</title>
-    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
-    <script src="https://cdn.rawgit.com/donmccurdy/aframe-extras/v4.1.2/dist/aframe-extras.min.js"></script>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Pyramid Collision Simulation</title>
+    <style>
+      body { margin: 0; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <!-- Include Three.js from a CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js"></script>
     <script>
-        AFRAME.registerComponent('pong-game', {
-            init: function () {
-                this.ball = document.querySelector('#ball');
-                this.paddleLeft = document.querySelector('#paddleLeft');
-                this.paddleRight = document.querySelector('#paddleRight');
-                this.ballDirection = { x: 0.03, y: 0.02 };
-                this.speed = 0.02;
-                
-                window.addEventListener('deviceorientation', (event) => {
-                    let tilt = event.gamma / 30;  // Normalize tilt
-                    this.movePaddle(this.paddleLeft, tilt * 0.2);
-                    this.movePaddle(this.paddleRight, -tilt * 0.2);
-                });
-                
-                document.addEventListener('touchmove', (event) => {
-                    let touch = event.touches[0];
-                    let normalizedY = (touch.clientY / window.innerHeight) * 3 - 1.5;
-                    this.paddleLeft.setAttribute('position', `-2.8 ${normalizedY} 0`);
-                    this.paddleRight.setAttribute('position', `2.8 ${-normalizedY} 0`);
-                });
-                
-                this.tick = this.tick.bind(this);
-            },
-            movePaddle: function (paddle, amount) {
-                let pos = paddle.getAttribute('position');
-                pos.y += amount;
-                pos.y = Math.max(-1.5, Math.min(1.5, pos.y));
-                paddle.setAttribute('position', pos);
-            },
-            tick: function () {
-                let ballPos = this.ball.getAttribute('position');
-                ballPos.x += this.ballDirection.x;
-                ballPos.y += this.ballDirection.y;
-                
-                // Bounce off walls
-                if (ballPos.y > 1.5 || ballPos.y < -1.5) {
-                    this.ballDirection.y *= -1;
-                }
-                
-                // Check for paddle collisions
-                let leftPaddlePos = this.paddleLeft.getAttribute('position');
-                let rightPaddlePos = this.paddleRight.getAttribute('position');
-                
-                if (ballPos.x < -2.7 && Math.abs(ballPos.y - leftPaddlePos.y) < 0.5) {
-                    this.ballDirection.x *= -1;
-                }
-                if (ballPos.x > 2.7 && Math.abs(ballPos.y - rightPaddlePos.y) < 0.5) {
-                    this.ballDirection.x *= -1;
-                }
-                
-                // Reset if out of bounds
-                if (ballPos.x < -3 || ballPos.x > 3) {
-                    ballPos.x = 0;
-                    ballPos.y = 0;
-                }
-                
-                this.ball.setAttribute('position', ballPos);
-            }
-        });
+      // ----- Setup Scene, Camera, and Renderer -----
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 0, 5);
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      // ----- Create Pyramid (using a Tetrahedron) -----
+      const pyramidGeometry = new THREE.TetrahedronGeometry(2); // adjust size as needed
+      const pyramidMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true });
+      const pyramid = new THREE.Mesh(pyramidGeometry, pyramidMaterial);
+      scene.add(pyramid);
+
+      // ----- Create the Ball (Sphere) -----
+      const ballRadius = 0.2;
+      const ballGeometry = new THREE.SphereGeometry(ballRadius, 16, 16);
+      const ballMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+      const ball = new THREE.Mesh(ballGeometry, ballMaterial);
+      scene.add(ball);
+
+      // ----- Ball Physics Variables (in world coordinates) -----
+      let ballPos = new THREE.Vector3(0, 0, 0);
+      let ballVel = new THREE.Vector3(0.02, 0.015, 0.01); // initial velocity
+      const gravity = new THREE.Vector3(0, 0, 0); // (set nonzero if desired)
+
+      // ----- Setup WebSocket Connection (for sending collision events) -----
+      const socket = new WebSocket('ws://your-websocket-server-address:port');
+      socket.addEventListener('open', function (event) {
+          console.log('WebSocket connected');
+      });
+      
+      function sendCollision() {
+          if (socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: 'collision', time: Date.now() }));
+          }
+      }
+
+      // ----- Collision Detection Helpers -----
+      // Returns the world–space positions of the pyramid’s vertices.
+      function getPyramidWorldVertices() {
+          const vertices = [];
+          const geo = pyramidGeometry;
+          const positionAttribute = geo.attributes.position;
+          for (let i = 0; i < positionAttribute.count; i++) {
+              const vertex = new THREE.Vector3().fromBufferAttribute(positionAttribute, i);
+              vertex.applyMatrix4(pyramid.matrixWorld);
+              vertices.push(vertex);
+          }
+          return vertices;
+      }
+
+      // For a tetrahedron there are four faces. (If the geometry is non-indexed, every 3 vertices form a face.)
+      const faces = [];
+      if (pyramidGeometry.index) {
+          const indices = pyramidGeometry.index.array;
+          for (let i = 0; i < indices.length; i += 3) {
+              faces.push([indices[i], indices[i+1], indices[i+2]]);
+          }
+      } else {
+          for (let i = 0; i < pyramidGeometry.attributes.position.count; i += 3) {
+              faces.push([i, i+1, i+2]);
+          }
+      }
+
+      // ----- Input Handling for Dragging -----
+      let isDragging = false;
+      let previousMousePosition = { x: 0, y: 0 };
+
+      renderer.domElement.addEventListener('mousedown', function(e) {
+          isDragging = true;
+          previousMousePosition = { x: e.clientX, y: e.clientY };
+      });
+      renderer.domElement.addEventListener('mousemove', function(e) {
+          if (isDragging) {
+              const deltaMove = {
+                  x: e.clientX - previousMousePosition.x,
+                  y: e.clientY - previousMousePosition.y
+              };
+              const rotationSpeed = 0.005;
+              pyramid.rotation.y += deltaMove.x * rotationSpeed;
+              pyramid.rotation.x += deltaMove.y * rotationSpeed;
+              previousMousePosition = { x: e.clientX, y: e.clientY };
+          }
+      });
+      document.addEventListener('mouseup', function() {
+          isDragging = false;
+      });
+
+      // ----- Device Orientation Handling (for phone tilting) -----
+      window.addEventListener('deviceorientation', function(event) {
+          // Use gamma (left-right) and beta (front-back) to set rotations.
+          const gamma = event.gamma || 0;
+          const beta  = event.beta  || 0;
+          pyramid.rotation.z = THREE.Math.degToRad(gamma);
+          pyramid.rotation.x = THREE.Math.degToRad(beta);
+      });
+
+      // ----- Main Animation Loop -----
+      function animate() {
+          requestAnimationFrame(animate);
+
+          // Update ball’s position using a simple physics step.
+          ballPos.add(ballVel);
+          ballVel.add(gravity);
+
+          // Check for collision against each face of the pyramid.
+          const vertices = getPyramidWorldVertices();
+          for (let f = 0; f < faces.length; f++) {
+              const [i1, i2, i3] = faces[f];
+              const v1 = vertices[i1], v2 = vertices[i2], v3 = vertices[i3];
+              // Compute face normal:
+              const edge1 = new THREE.Vector3().subVectors(v2, v1);
+              const edge2 = new THREE.Vector3().subVectors(v3, v1);
+              const faceNormal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
+              // Distance from ball center to the face’s plane:
+              const distance = new THREE.Vector3().subVectors(ballPos, v1).dot(faceNormal);
+              if (distance < ballRadius) {
+                  // Only reflect if the ball is moving toward the face.
+                  if (ballVel.dot(faceNormal) < 0) {
+                      // Reflect the ball’s velocity: v' = v – 2*(v·n)*n
+                      const reflect = faceNormal.clone().multiplyScalar(2 * ballVel.dot(faceNormal));
+                      ballVel.sub(reflect);
+                      // Push the ball out of the collision to avoid “sticking.”
+                      ballPos.add(faceNormal.clone().multiplyScalar(ballRadius - distance));
+                      // Send a collision event.
+                      sendCollision();
+                  }
+              }
+          }
+
+          // Update the ball mesh position.
+          ball.position.copy(ballPos);
+
+          renderer.render(scene, camera);
+      }
+      animate();
+
+      // ----- Handle Window Resizing -----
+      window.addEventListener('resize', function() {
+          camera.aspect = window.innerWidth / window.innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(window.innerWidth, window.innerHeight);
+      });
     </script>
-</head>
-<body>
-    <a-scene embedded arjs="sourceType: webcam;">
-        <a-camera position="0 1.5 5"></a-camera>
-        
-        <a-plane position="0 0 0" rotation="-90 0 0" width="6" height="3" color="gray"></a-plane>
-        <a-box id="paddleLeft" position="-2.8 0 0" width="0.2" height="1" depth="0.1" color="blue"></a-box>
-        <a-box id="paddleRight" position="2.8 0 0" width="0.2" height="1" depth="0.1" color="red"></a-box>
-        <a-sphere id="ball" position="0 0 0.1" radius="0.15" color="white"></a-sphere>
-        
-        <a-entity pong-game></a-entity>
-    </a-scene>
-</body>
+  </body>
 </html>
